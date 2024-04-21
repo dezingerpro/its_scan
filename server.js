@@ -7,6 +7,7 @@ const server = http.createServer(app);
 const cors = require('cors');
 const csv = require('csv-parser');
 app.use(express.json());
+//tkm:tkm123@ SQL USER
 const corsOptions = {
     origin: '*',  // or use "*" to allow all origins
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Methods allowed
@@ -23,6 +24,22 @@ const wss = new WebSocket.Server({ port: 3000 });
 const clients = new Map();  // Keep track of all connected clients
 const { v4: uuidv4 } = require('uuid');
 let successfulITSIds = new Set();
+
+const mysql = require('mysql2');
+const connection = mysql.createConnection({
+    host: 'localhost',
+    user: 'abiali',
+    password: 'abiali',
+    database: 'its_scan'
+});
+
+connection.connect((err) => {
+    if (err) {
+        console.error('Error connecting to MySQL:', err);
+    } else {
+        console.log('Connected to MySQL!');
+    }
+});
 
 wss.on('connection', (ws) => {
     const userId = uuidv4(); // Generate a unique user ID
@@ -177,6 +194,124 @@ app.post('/uploadIds', async (req, res) => {
         console.error('Error processing ITS IDs:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
+});
+
+app.post('/register', async (req, res) => {
+    const { its_id, username, password, role, tkm_mohalla, designation } = req.body;
+
+    // Hash the password
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const query = 'INSERT INTO users (its_id, username, password_hash, role, tkm_mohalla, designation) VALUES (?, ?, ?, ?, ?, ?)';
+    connection.query(query, [its_id, username, passwordHash, role, tkm_mohalla, designation], (err, results) => {
+        if (err) {
+            console.error('Error registering user:', err);
+            res.status(500).json({ error: 'Internal server error' });
+        } else {
+            res.status(201).json({ message: 'User registered successfully!' });
+        }
+    });
+});
+
+app.post('/login', async (req, res) => {
+    const { its_id, password } = req.body;
+
+    const query = 'SELECT * FROM users WHERE its_id = ?';
+    connection.query(query, [its_id], async (err, results) => {
+        if (err) {
+            console.error('Error during login:', err);
+            res.status(500).json({ error: 'Internal server error' });
+        } else if (results.length === 0) {
+            res.status(404).json({ error: 'User not found' });
+        } else {
+            const user = results[0];
+            const isPasswordCorrect = await bcrypt.compare(password, user.password_hash);
+
+            if (isPasswordCorrect) {
+                const token = jwt.sign({ user_id: user.user_id, role: user.role }, 'your_jwt_secret', { expiresIn: '1h' });
+                res.status(200).json({ token });
+            } else {
+                res.status(401).json({ error: 'Invalid credentials' });
+            }
+        }
+    });
+});
+
+
+app.get('/users/:its_id', (req, res) => {
+    const its_id = req.params.its_id;
+
+    const query = 'SELECT * FROM users WHERE its_id = ?';
+    connection.query(query, [its_id], (err, results) => {
+        if (err) {
+            console.error('Error fetching user:', err);
+            res.status(500).json({ error: 'Internal server error' });
+        } else if (results.length === 0) {
+            res.status(404).json({ error: 'User not found' });
+        } else {
+            res.status(200).json(results[0]);
+        }
+    });
+});
+
+app.put('/users/:its_id', async (req, res) => {
+    const its_id = req.params.its_id;
+    const { username, password, role, tkm_mohalla, designation } = req.body;
+
+    let updateFields = [];
+    let values = [];
+
+    if (username) {
+        updateFields.push('username = ?');
+        values.push(username);
+    }
+
+    if (password) {
+        const passwordHash = await bcrypt.hash(password, 10);
+        updateFields.push('password_hash = ?');
+        values.push(passwordHash);
+    }
+
+    if (role) {
+        updateFields.push('role = ?');
+        values.push(role);
+    }
+
+    if (tkm_mohalla) {
+        updateFields.push('tkm_mohalla = ?');
+        values.push(tkm_mohalla);
+    }
+
+    if (designation) {
+        updateFields.push('designation = ?');
+        values.push(designation);
+    }
+
+    const query = `UPDATE users SET ${updateFields.join(', ')} WHERE its_id = ?`;
+    values.push(its_id);
+
+    connection.query(query, values, (err, results) => {
+        if (err) {
+            console.error('Error updating user:', err);
+            res.status(500).json({ error: 'Internal server error' });
+        } else {
+            res.status(200).json({ message: 'User updated successfully!' });
+        }
+    });
+});
+
+app.delete('/users/:its_id', (req, res) => {
+    const its_id = req.params.its_id;
+
+    const query = 'DELETE FROM users WHERE its_id = ?';
+    connection.query(query, [its_id], (err, results) => {
+        if (err) {
+            console.error('Error deleting user:', err);
+            res.status(500).json({ error: 'Internal server error' });
+        } else {
+            res.status(200).json({ message: 'User deleted successfully!' });
+        }
+    });
 });
 
 
