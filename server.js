@@ -30,7 +30,7 @@ const connection = mysql.createConnection({
     host: 'localhost',
     user: 'tkm',
     password: 'tkm123@',
-    database: 'its_scan'
+    database: 'ITS_SCAN_APP'
 });
 
 connection.connect((err) => {
