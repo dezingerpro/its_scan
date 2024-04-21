@@ -6,6 +6,7 @@ const app = express();
 const server = http.createServer(app);
 const cors = require('cors');
 const csv = require('csv-parser');
+const bcrypt = require('bcrypt');
 app.use(express.json());
 //tkm:tkm123@ SQL USER
 const corsOptions = {
