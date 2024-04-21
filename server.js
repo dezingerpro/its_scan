@@ -28,8 +28,8 @@ let successfulITSIds = new Set();
 const mysql = require('mysql2');
 const connection = mysql.createConnection({
     host: 'localhost',
-    user: 'abiali',
-    password: 'abiali',
+    user: 'tkm',
+    password: 'tkm123@',
     database: 'its_scan'
 });
 
