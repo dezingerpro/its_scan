@@ -9,6 +9,7 @@ const csv = require('csv-parser');
 const bcrypt = require('bcrypt');
 const ExcelJS = require('exceljs');
 const path = require('path');
+const multer = require('multer');
 
 app.use(express.json());
 //tkm:tkm123@ SQL USER
@@ -31,6 +32,7 @@ const { v4: uuidv4 } = require('uuid');
 let successfulITSIds = new Set();
 
 const mysql = require('mysql2'); // Use mysql2 for asynchronous MySQL operations
+const { connect } = require('http2');
 const connection = mysql.createConnection({
   host: '13.214.60.179',
   user: 'tkm',
@@ -271,6 +273,34 @@ app.post('/lookupITS', async (req, res) => {
   }
 });
 
+//Store ITS in DB
+app.post('/store-ITS', async (req, res) => {
+  try {
+    // Assuming the entire entry map is sent as a single object in the request body
+    const { id, name, gate, seatName, gender, memberid, eventId, date } = req.body;
+
+    const query = 'INSERT INTO its_scanning_app.ScannedDataShort (ITS_ID, Full_Name, Gate_ID, Seat_Number, Gender, Member_ID, Miqaat_ID, Scanned_Time) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
+    // Execute the query to insert the data
+    connection.query(query, [id, name, gate, seatName, gender, memberid, eventId, date], (err, result) => {
+      if (err) {
+        console.error('Error inserting scanned data:', err);
+        return res.status(500).json({ error: 'Failed to insert scanned data' });
+      }
+      console.log('Scanned data inserted successfully');
+      // Assuming you want to return the inserted data back to the client
+      res.status(200).json({
+        message: 'Scanned data inserted successfully',
+        data: {
+          id, name, gate, seatName, gender, memberid, eventId, date
+        }
+      });
+    });
+  } catch (error) {
+    console.error('Error handling request:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Serve static files from a specific folder, e.g., 'public'
 app.use('/downloads', express.static(path.join(__dirname, 'public')));
 
@@ -355,6 +385,7 @@ function exportMiqaatData(tableName, miqaatId, callback) {
 
           const deleteDataQuery = `
               DELETE FROM ScannedDataShort WHERE Miqaat_ID = ${mysql.escape(miqaatId)};
+              ALTER TABLE ScannedDataShort AUTO_INCREMENT = (SELECT MAX(id) + 1 FROM ScannedDataShort);
           `;
 
           connection.query(deleteDataQuery, async (err, result) => {
@@ -594,14 +625,14 @@ app.delete('/users/:its_id', (req, res) => {
 
 // CREATE Miqaat
 app.post('/miqaat', (req, res) => {
-  const { miqaat_name, miqaat_date, status } = req.body;
+  const { miqaat_name, miqaat_date, status, type } = req.body;
 
   if (!miqaat_name || !miqaat_date) {
     return res.status(400).json({ error: 'Miqaat name and date are required' });
   }
 
-  const query = 'INSERT INTO Miqaats (miqaat_name, miqaat_date, status) VALUES (?, ?, ?)';
-  connection.query(query, [miqaat_name, miqaat_date, status], (err, result) => {
+  const query = 'INSERT INTO Miqaats (miqaat_name, miqaat_date, status, type) VALUES (?, ?, ?, ?)';
+  connection.query(query, [miqaat_name, miqaat_date, status, type], (err, result) => {
     if (err) {
       console.error('Error inserting miqaat:', err);
       return res.status(500).json({ error: 'Internal server error' });
@@ -623,6 +654,30 @@ app.get('/miqaat', (req, res) => {
     }
 
     res.status(200).json(results); // Return all miqaats
+  });
+});
+
+app.get('/fetch-miqaat-by-type/:type', (req, res) => {
+  const type = req.params.type;
+
+  if (!type) {
+      return res.status(400).json({ error: 'Invalid type' });
+  }
+
+  const query = 'SELECT * FROM Miqaats WHERE type = ?';
+
+  connection.query(query, [type], (err, results) => {
+      if (err) {
+          console.error('Error fetching miqaat by type:', err);
+          return res.status(500).json({ error: 'Internal server error' });
+      }
+
+      if (results.length === 0) {
+          return res.status(404).json({ error: 'No miqaat found for the given type' });
+      }
+
+      console.log(results);
+      res.status(200).json(results); // Return all miqaats for the given type
   });
 });
 
@@ -654,7 +709,7 @@ app.get('/miqaat/:id', (req, res) => {
 // UPDATE Miqaat by ID
 app.put('/miqaat/:id', (req, res) => {
   const miqaat_id = parseInt(req.params.id, 10);
-  const { miqaat_name, miqaat_date, status } = req.body;
+  const { miqaat_name, miqaat_date, status, type } = req.body;
 
   if (isNaN(miqaat_id)) {
     return res.status(400).json({ error: 'Invalid miqaat ID' });
@@ -676,6 +731,11 @@ app.put('/miqaat/:id', (req, res) => {
   if (status) {
     updateFields.push('status = ?');
     values.push(status);
+  }
+
+  if (type) {
+    updateFields.push('type = ?');
+    values.push(type);
   }
 
   if (updateFields.length === 0) {
@@ -781,15 +841,12 @@ app.post('/assign-members', (req, res) => {
 //CRUD GATES
 
 // CREATE Gate
-app.post('/gates', (req, res) => {
-  const { gate_name, mohalla_id } = req.body;
+app.post('/create-gates', (req, res) => {
+  const { gate_name, mohalla_id, miqaat_id } = req.body;
+  console.log(req.body);
 
-  if (!gate_name || !mohalla_id) {
-    return res.status(400).json({ error: 'Gate name and Mohalla ID are required' });
-  }
-
-  const query = 'INSERT INTO Gates (gate_name, mohalla_id) VALUES (?, ?)';
-  connection.query(query, [gate_name, mohalla_id], (err, result) => {
+  const query = 'INSERT INTO Gates (gate_name, mohalla_id, miqaat_id) VALUES (?, ?, ?)';
+  connection.query(query, [gate_name, mohalla_id,miqaat_id], (err, result) => {
     if (err) {
       console.error('Error creating gate:', err);
       return res.status(500).json({ error: 'Internal server error' });
@@ -800,7 +857,7 @@ app.post('/gates', (req, res) => {
 });
 
 // READ All Gates
-app.get('/gates', (req, res) => {
+app.get('/fetch-gates', (req, res) => {
   const query = 'SELECT * FROM Gates';
   connection.query(query, (err, results) => {
     if (err) {
@@ -813,7 +870,7 @@ app.get('/gates', (req, res) => {
 });
 
 // READ Single Gate by ID
-app.get('/gates/:gate_id', (req, res) => {
+app.get('/gates-id/:gate_id', (req, res) => {
   const gate_id = parseInt(req.params.gate_id);
 
   if (isNaN(gate_id)) {
@@ -836,16 +893,16 @@ app.get('/gates/:gate_id', (req, res) => {
 });
 
 // UPDATE Gate by ID
-app.put('/gates/:gate_id', (req, res) => {
+app.put('/update-gates/:gate_id', (req, res) => {
   const gate_id = parseInt(req.params.gate_id);
-  const { gate_name, mohalla_id } = req.body;
+  const { gate_name, mohalla_id,miqaat_id } = req.body;
 
   if (isNaN(gate_id)) {
     return res.status(400).json({ error: 'Invalid gate ID' });
   }
 
-  const query = 'UPDATE Gates SET gate_name = ?, mohalla_id = ? WHERE gate_id = ?';
-  connection.query(query, [gate_name, mohalla_id, gate_id], (err, results) => {
+  const query = 'UPDATE Gates SET gate_name = ?, mohalla_id = ?, miqaat_id = ? WHERE gate_id = ?';
+  connection.query(query, [gate_name, mohalla_id,miqaat_id, gate_id], (err, results) => {
     if (err) {
       console.error('Error updating gate:', err);
       return res.status(500).json({ error: 'Internal server error' });
@@ -856,7 +913,7 @@ app.put('/gates/:gate_id', (req, res) => {
 });
 
 // DELETE Gate by ID
-app.delete('/gates/:gate_id', (req, res) => {
+app.delete('/delete-gates/:gate_id', (req, res) => {
   const gate_id = parseInt(req.params.gate_id);
 
   if (isNaN(gate_id)) {
@@ -929,32 +986,101 @@ app.get('/fetch-gate-assignments/:eventId', (req, res) => {
   });
 });
 
-// // GET API to fetch miqaat names assigned to each member
-// app.get('/miqaats_for_user/:memberId', (req, res) => {
-//   console.log("HERE");
-//   const memberId = parseInt(req.params.memberId);
+//CENTRAL GATE ASSINGMENTS
+app.post('/update-gate-assignments', (req, res) => {
+  const { eventId, assignments } = req.body;
 
-//   if (isNaN(memberId)) {
-//     return res.status(400).json({ error: 'Invalid member ID' });
-//   }
+  console.log("Received data for updating gate assignments:", req.body);
 
-//   const query = `
-//     SELECT m.miqaat_id, m.miqaat_name, m.miqaat_date
-//     FROM Miqaats m
-//     JOIN MiqaatMembers mm ON m.miqaat_id = mm.miqaat_id
-//     WHERE mm.member_id = ?;
-//   `;
+  if (!eventId || !assignments || !Array.isArray(assignments)) {
+    return res.status(400).json({ error: 'Missing or invalid required fields: eventId or assignments must be an array' });
+  }
 
-//   connection.query(query, [memberId], (err, results) => {
-//     if (err) {
-//       console.error('Error fetching miqaats:', err);
-//       return res.status(500).json({ error: 'Internal server error' });
-//     }
-//     //console.log(json(results));
-//     console.log(results);
-//     res.status(200).json(results); // Return all miqaats assigned to the member
-//   });
-// });
+  connection.beginTransaction(err => {
+    if (err) {
+      console.error('Error starting transaction:', err);
+      return res.status(500).json({ error: 'Internal server error starting transaction' });
+    }
+
+    const deleteQuery = 'DELETE FROM GateAssignments WHERE miqaat_id = ?';
+    connection.query(deleteQuery, [eventId], (deleteErr, deleteResult) => {
+      if (deleteErr) {
+        console.error('Error deleting existing assignments:', deleteErr);
+        connection.rollback(() => {
+          return res.status(500).json({ error: 'Internal server error deleting existing assignments' });
+        });
+      } else {
+        const insertValues = assignments.flatMap(assign => 
+          assign.gateIds.map(gateId => [eventId, assign.memberId, gateId])
+        );
+
+        if (insertValues.length > 0) {
+          const insertQuery = 'INSERT INTO GateAssignments (miqaat_id, member_id, gate_id) VALUES ?';
+          connection.query(insertQuery, [insertValues], (insertErr, insertResult) => {
+            if (insertErr) {
+              console.error('Error inserting new assignments:', insertErr);
+              connection.rollback(() => {
+                return res.status(500).json({ error: 'Internal server error inserting new assignments' });
+              });
+            } else {
+              connection.commit(commitErr => {
+                if (commitErr) {
+                  console.error('Error committing transaction:', commitErr);
+                  connection.rollback(() => {
+                    return res.status(500).json({ error: 'Internal server error during commit' });
+                  });
+                } else {
+                  res.status(200).json({ message: 'Gate assignments updated successfully' });
+                }
+              });
+            }
+          });
+        } else {
+          connection.rollback(() => {
+            return res.status(400).json({ error: 'No valid gate assignments provided' });
+          });
+        }
+      }
+    });
+  });
+});
+
+app.get('/fetch-central-gate-assignments/:eventId', (req, res) => {
+  const eventId = parseInt(req.params.eventId);
+
+  if (isNaN(eventId)) {
+    return res.status(400).json({ error: 'Invalid event ID' });
+  }
+
+  const query = 'SELECT * FROM CentralGateAssignments WHERE miqaat_id = ?';
+
+  connection.query(query, [eventId], (err, results) => {
+    if (err) {
+      console.error('Error fetching gate assignments:', err);
+      res.status(500).json({ error: 'Internal server error' });
+    } else {
+      res.status(200).json(results); // Return all gate assignments for the event
+    }
+  });
+});
+
+//select gates by miqaat id
+// Get gates by miqaat_id
+app.get('/get-gates/:miqaatId', (req, res) => {
+  const miqaatId = req.params.miqaatId;
+  const query = 'SELECT * FROM Gates WHERE miqaat_id = ?';
+
+  connection.query(query, [miqaatId], (err, results) => {
+      if (err) {
+          console.error('Error fetching gates:', err);
+          return res.status(500).json({ error: 'Internal server error' });
+      }
+      if (results.length === 0) {
+          return res.status(404).json({ message: 'No gates found for the given miqaat_id' });
+      }
+      res.status(200).json(results);
+  });
+});
 
 // GET API to fetch miqaat names assigned to each member using GateAssignments
 app.get('/miqaats_for_user/:memberId', (req, res) => {
@@ -968,11 +1094,11 @@ app.get('/miqaats_for_user/:memberId', (req, res) => {
 
   // This query joins Miqaats and GateAssignments and selects unique Miqaats for the given member
   const query = `
-    SELECT DISTINCT m.miqaat_id, m.miqaat_name, m.miqaat_date
-    FROM Miqaats m
-    JOIN GateAssignments ga ON m.miqaat_id = ga.miqaat_id
-    WHERE ga.member_id = ?
-    ORDER BY m.miqaat_date;
+  SELECT DISTINCT m.miqaat_id, m.miqaat_name, m.miqaat_date
+  FROM Miqaats m
+  JOIN GateAssignments ga ON m.miqaat_id = ga.miqaat_id
+  WHERE ga.member_id = ? AND m.status = 'ongoing'
+  ORDER BY m.miqaat_date;
   `;
 
   connection.query(query, [memberId], (err, results) => {
@@ -1021,6 +1147,174 @@ app.post('/insert-scanned-data-short', (req, res) => {
     }
     res.status(200).json({ message: 'Scanned data short inserted successfully' });
   });
+});
+
+// Configure multer for file storage
+const storage = multer.diskStorage({
+  destination: function(req, file, cb) {
+      cb(null, './'); // Save file in the current directory (root of project)
+  },
+  filename: function(req, file, cb) {
+      // Set filename as the event name from the form field with a file extension
+      const eventName = req.body.event_name;
+      const fileExtension = path.extname(file.originalname);
+      const fileName = `${eventName}${fileExtension}`; // Construct filename using event name and original extension
+      cb(null, fileName);
+  }
+});
+
+// Create multer instance specifying the storage options
+const upload = multer({ storage: storage });
+
+// Define a route for uploading files
+app.post('/upload', upload.single('file'), (req, res) => {
+  if (!req.file) {
+      return res.status(400).send('No file uploaded.');
+  }
+  res.send('File uploaded successfully as: ' + req.file.filename);
+});
+
+//CENTRAL MIQAAT GATES
+
+// Create a new gate
+app.post('/create-central-gates', (req, res) => {
+  const { gate_Name, miqaat_id } = req.body;
+  console.log(gate_Name);
+  console.log(miqaat_id);
+  if (!gate_Name || !miqaat_id) {
+      return res.status(400).json({ error: 'Gate name and Miqaat ID are required' });
+  }
+  const query = 'INSERT INTO CentralGates (gate_Name, miqaat_id) VALUES (?, ?)';
+  connection.query(query, [gate_Name, miqaat_id], (err, results) => {
+      if (err) {
+          console.error('Error adding new gate:', err);
+          return res.status(500).json({ error: 'Internal server error' });
+      }
+      res.status(201).json({ id: results.insertId, gate_Name, miqaat_id });
+  });
+});
+
+// Read all gates
+app.get('/get-all-central-gates', (req, res) => {
+  connection.query('SELECT * FROM CentralGates', (err, results) => {
+      if (err) {
+          console.error('Error fetching gates:', err);
+          return res.status(500).json({ error: 'Internal server error' });
+      }
+      res.json(results);
+  });
+});
+
+// Read a gate by ID
+app.get('/get-central-gates/:id', (req, res) => {
+  const { id } = req.params;
+  console.log(id);
+  connection.query('SELECT * FROM CentralGates WHERE miqaat_id = ?', [id], (err, results) => {
+      if (err) {
+          console.error('Error fetching gate:', err);
+          return res.status(500).json({ error: 'Internal server error' });
+      }
+      if (results.length > 0) {
+        console.log(results);
+          res.json(results);
+      } else {
+          res.status(404).json({ error: 'Gate not found' });
+      }
+  });
+});
+
+// Update a gate
+app.put('/update-central-gates/:id', (req, res) => {
+  const { id } = req.params;
+  const { gate_Name, miqaat_id } = req.body;
+  const query = 'UPDATE CentralGates SET gate_Name = ?, miqaat_id = ? WHERE id = ?';
+  connection.query(query, [gate_Name, miqaat_id, id], (err, results) => {
+      if (err) {
+          console.error('Error updating gate:', err);
+          return res.status(500).json({ error: 'Internal server error' });
+      }
+      if (results.affectedRows === 0) {
+          return res.status(404).json({ error: 'Gate not found' });
+      }
+      res.json({ message: 'Gate updated successfully' });
+  });
+});
+
+// Delete a gate
+app.delete('/delete-central-gates/:id', (req, res) => {
+  const { id } = req.params;
+  connection.query('DELETE FROM CentralGates WHERE id = ?', [id], (err, results) => {
+      if (err) {
+          console.error('Error deleting gate:', err);
+          return res.status(500).json({ error: 'Internal server error' });
+      }
+      if (results.affectedRows === 0) {
+          return res.status(404).json({ error: 'Gate not found' });
+      }
+      res.json({ message: 'Gate deleted successfully' });
+  });
+});
+
+const readFile = require('read-excel-file/node');
+
+app.get('/getEventData', async (req, res) => {
+  console.log("hi");
+  const eventName = req.query.eventName;  // Retrieve the event name from query parameters
+  if (!eventName) {
+      return res.status(400).send('Event name is required');
+  }
+
+  // Construct the path to the file based on the event name and check multiple extensions
+  const basePath = `./${eventName}`;
+  let pathToFile;
+  const possibleExtensions = ['.csv', '.xlsx', '.xls'];
+
+  // Find the first existing file matching one of the possible extensions
+  for (let ext of possibleExtensions) {
+      if (fs.existsSync(basePath + ext)) {
+          pathToFile = basePath + ext;
+          break;
+      }
+  }
+
+  if (!pathToFile) {
+      return res.status(404).send('File not found for the given event name');
+  }
+
+  try {
+      const workbook = new ExcelJS.Workbook();
+      let worksheet;
+
+      // Read the file based on its extension
+      if (pathToFile.endsWith('.csv')) {
+          await workbook.csv.readFile(pathToFile);
+          worksheet = workbook.worksheets[0];
+      } else {
+          await workbook.xlsx.readFile(pathToFile);
+          worksheet = workbook.worksheets[0];
+      }
+
+      // Read data and convert to JSON
+      let headers = [];
+      const data = [];
+      worksheet.eachRow({ includeEmpty: false }, function(row, rowNumber) {
+          if (rowNumber === 1) {
+              // Assuming the first row is the header
+              headers = row.values;
+          } else {
+              let rowData = {};
+              row.values.forEach((value, colNumber) => {
+                  rowData[headers[colNumber]] = value;
+              });
+              data.push(rowData);
+          }
+      });
+
+      res.json(data);
+  } catch (error) {
+      console.error('Error reading file:', error);
+      res.status(500).send('Failed to read the file');
+  }
 });
 
 const port = 8080;
